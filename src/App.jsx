@@ -37,8 +37,8 @@ import MarkerToggle from './components/MarkerToggle/MarkerToggle';
 import CoordinateFinder from './components/Map/CoordinateFinder';
 
 // Constants
-const bounds = [[0, 0], [6000, 8000]];
-const center = [3000, 4000];
+const bounds = [[0, 0], [9216, 9216]];
+const center = [4608, 4608];
 const markersData = [];
 
 const TopLeftCRS = L.extend({}, L.CRS.Simple, {

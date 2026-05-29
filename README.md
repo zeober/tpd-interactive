@@ -1,6 +1,8 @@
 # 🧭 Promethean Directive — Interactive Map Website
 https://hbdmer.github.io/tpd-interactive/ 
 
+This is a fork of the original TPD S2 website, testing some changes for S3
+
 This is the official interactive website for the **The Promethean Directive**, a geopolitical storytelling game. This site lets players access the world map, view factions, and specialized planning tools/functionality.
 
 ##  Features
