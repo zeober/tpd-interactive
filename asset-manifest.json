@@ -1,10 +1,11 @@
 {
   "files": {
     "main.css": "/tpd-interactive/static/css/main.9f80d920.css",
-    "main.js": "/tpd-interactive/static/js/main.e6905cee.js",
+    "main.js": "/tpd-interactive/static/js/main.77484b96.js",
     "static/js/453.fda10de0.chunk.js": "/tpd-interactive/static/js/453.fda10de0.chunk.js",
     "static/media/popmap.png": "/tpd-interactive/static/media/popmap.8f59588cda0611937bd3.png",
     "static/media/farmmap.png": "/tpd-interactive/static/media/farmmap.0684f6eaf9080d6559c7.png",
+    "static/media/map01.png": "/tpd-interactive/static/media/map01.f58f40dde45833022d5a.png",
     "static/media/map00.png": "/tpd-interactive/static/media/map00.a2da03bd798deb8c13cc.png",
     "static/media/resmap.png": "/tpd-interactive/static/media/resmap.43fb5c7b1b9752fa266d.png",
     "static/media/biomemap.png": "/tpd-interactive/static/media/biomemap.fe3dfb809e300d21d039.png",
@@ -42,11 +43,11 @@
     "index.html": "/tpd-interactive/index.html",
     "static/media/cross.ico": "/tpd-interactive/static/media/cross.48b3858dc1d8974f30e4.ico",
     "main.9f80d920.css.map": "/tpd-interactive/static/css/main.9f80d920.css.map",
-    "main.e6905cee.js.map": "/tpd-interactive/static/js/main.e6905cee.js.map",
+    "main.77484b96.js.map": "/tpd-interactive/static/js/main.77484b96.js.map",
     "453.fda10de0.chunk.js.map": "/tpd-interactive/static/js/453.fda10de0.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.9f80d920.css",
-    "static/js/main.e6905cee.js"
+    "static/js/main.77484b96.js"
   ]
 }
