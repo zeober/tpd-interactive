@@ -16,7 +16,8 @@ export default function SidebarTabs({ active, onChange }) {
         onClick={() => onChange('tab2')}
       >
         ⛭
-      </button>
+          </button>
     </div>
   );
 }
+//sun symbol would be converted to fleet control tab.

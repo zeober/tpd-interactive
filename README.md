@@ -1,9 +1,9 @@
-# 🧭 Promethean Directive — Interactive Map Website
-https://hbdmer.github.io/tpd-interactive/ 
+# 🧭 Promethean Directive Season 3— Interactive Map Website
+https://zeober.github.io/tpd-interactive/ 
 
-This is a fork of the original TPD S2 website, testing some changes for S3
+This is a fork of the original TPD S2 website, with some changes for S3
 
-This is the official interactive website for the **The Promethean Directive**, a geopolitical storytelling game. This site lets players access the world map, view factions, and specialized planning tools/functionality.
+This is the official interactive website for the **The Promethean Directive Season 3**, a geopolitical storytelling game. This site lets players access the world map, view factions, and specialized planning tools/functionality.
 
 ##  Features
 
@@ -17,4 +17,4 @@ This site is actively being updated alongside game turns. Some features may chan
 
 ##  Contact
 
-For bugs, suggestions, or updates, contact me at ahabdmer@gmail.com.
+~~For bugs, suggestions, or updates, contact me at ahabdmer@gmail.com. ~~
