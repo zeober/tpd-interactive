@@ -6,6 +6,7 @@ import {
     Marker,
     Popup,
     Polyline,
+    Circle,
     Tooltip,
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -153,6 +154,10 @@ const App = () => {
     const [drawStart, setDrawStart] = useState(null);
     const [eraseRadius, setEraseRadius] = useState(50);
     const [isMultiDraw, setIsMultiDraw] = useState(false);
+
+    const [droppedMarkers, setDroppedMarkers] = useState([]);
+    const [circles, setCircles] = useState([]);
+    const [circleStart, setCircleStart] = useState(null);
 
     // Fleet import/data
     const [fleetImportText, setFleetImportText] = useState('');
@@ -318,35 +323,39 @@ const App = () => {
 
     // Alternative Cloudflare API retrieval method.
     const importFactionMapByFileName = useCallback(async (fileName) => {
-    const url = buildCloudflareMapUrl(fileName);
+        const url = buildCloudflareMapUrl(fileName);
 
-    const check = await fetch(url);
+        const check = await fetch(url);
 
-    if (!check.ok) {
-        console.info(`Internal map not found or not allowed. Status: ${check.status}`); 
-    //403 Forbidden(bad origin), 404 Not Found (bad/missing map file), 500 Server Error (Bad: Key, gservice, API, token, secret, download fail, worker fail). 
-    //in CloudflareWorker, run npx wrangler tail for debug. (Reenable debug code)
-        return null;
-    }
+        if (!check.ok) {
+            console.info(`Internal map not found or not allowed. Status: ${check.status}`);
+            // 403 Forbidden: bad origin
+            // 404 Not Found: bad/missing map file
+            // 500 Server Error: key/service account/API/token/secret/download/Worker failure
+            // In CloudflareWorker, run: npx wrangler tail
+            return null;
+        }
 
-    const mapName = 'Internal Map';
+        const mapName = 'Internal Map';
 
-    const map = {
-        name: mapName,
-        url,
-        source: 'cloudflare-worker-gm-drive',
-        fileName,
-    };
+        const map = {
+            name: mapName,
+            url,
+            source: 'cloudflare-worker-gm-drive',
+            fileName,
+        };
 
-    setImportedMaps(prev => [
-        ...prev.filter(m => m.name !== mapName),
-        map,
-    ]);
+        setImportedMaps(prev => [
+            ...prev.filter(m => m.name !== mapName),
+            map,
+        ]);
 
-    setSelectedMap(mapName);
+        setSelectedMap(mapName);
 
-    return map;
-}, []);
+        return map;
+    }, []);
+
+
 
 
 
@@ -441,12 +450,51 @@ const App = () => {
                     </Marker>
                 ))}
 
+                {droppedMarkers.map(marker => (
+                    <Marker
+                        key={marker.id}
+                        position={[marker.y, marker.x]}
+                        icon={markerIcons.clickmarker}
+                        eventHandlers={{
+                            click: (e) => {
+                                e.originalEvent?.stopPropagation();
+                                e.originalEvent?.preventDefault?.();
+                            },
+                            mousedown: (e) => {
+                                e.originalEvent?.stopPropagation();
+                            },
+                        }}
+                    >
+                        <Popup>
+                            <b>Marker</b><br />
+                            X: {Math.round(marker.x)}<br />
+                            Y: {Math.round(marker.y)}
+                        </Popup>
+
+                        <Tooltip>
+                            ({Math.round(marker.x)}, {Math.round(marker.y)})
+                        </Tooltip>
+                    </Marker>
+                ))}
+
                 {lines.map((line) => (
                     <Polyline key={line.id} positions={line.positions}>
                         <Tooltip permanent direction="center" offset={[0, -10]}>
                             {line.dist.toFixed(0)} units
                         </Tooltip>
                     </Polyline>
+                ))}
+
+                {circles.map(circle => (
+                    <Circle
+                        key={circle.id}
+                        center={[circle.center.y, circle.center.x]}
+                        radius={circle.radius}
+                    >
+                        <Tooltip permanent direction="center">
+                            {circle.label || `R: ${Math.round(circle.radius)}`}
+                        </Tooltip>
+                    </Circle>
                 ))}
 
                 <FleetMapApp
@@ -461,6 +509,7 @@ const App = () => {
                     coords={coords}
                     setToastMsg={setToastMsg}
                     activeTool={activeTool}
+                    setActiveTool={setActiveTool}
                     setCoords={setCoords}
                     drawStart={drawStart}
                     setDrawStart={setDrawStart}
@@ -469,6 +518,13 @@ const App = () => {
                     isMultiDraw={isMultiDraw}
                     setIsMultiDraw={setIsMultiDraw}
                     setSelectedFleet={setSelectedFleet}
+
+                    droppedMarkers={droppedMarkers}
+                    setDroppedMarkers={setDroppedMarkers}
+                    circles={circles}
+                    setCircles={setCircles}
+                    circleStart={circleStart}
+                    setCircleStart={setCircleStart}
                 />
 
                 <CoordinateFinder

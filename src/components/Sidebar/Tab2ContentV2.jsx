@@ -51,19 +51,9 @@ function buildCsvExportUrl(sheetUrl) {
 }
 
 function parseMilitaryFleetRows(rows) {
-    // Rows 3–22 become indexes 2–21.
-    // Preserve exactly 20 rows so output aligns with K3:N22.
     return rows.slice(2, 22).map((row, index) => {
         const rowNumber = index + 3;
 
-        // B = name
-        // I = x now / x1
-        // J = y now / y1
-        // K = x mid / x2
-        // L = y mid / y2
-        // M = end x / x3
-        // N = end y / y3
-        // Q = range in pixels
         const name = String(row[1] ?? '').trim();      // B
         const x1 = toNumberOrNull(row[8]);             // I
         const y1 = toNumberOrNull(row[9]);             // J
@@ -73,61 +63,94 @@ function parseMilitaryFleetRows(rows) {
         const y3FromSheet = toNumberOrNull(row[13]);   // N
         const range = toNumberOrNull(row[16]);         // Q
 
-        const active = name.length > 0;
-        const hasMidpoint = active && x2 != null && y2 != null;
+        const hasName = name.length > 0;
+
+        const hasStartPoint =
+            hasName &&
+            x1 != null &&
+            y1 != null;
+
+        const hasRange =
+            hasName &&
+            range != null;
+
+        const validForMap =
+            hasName &&
+            hasStartPoint &&
+            hasRange;
+
+        const hasMidpoint =
+            validForMap &&
+            x2 != null &&
+            y2 != null;
+
+        const hasFinalPoint =
+            x3FromSheet != null &&
+            y3FromSheet != null;
 
         return {
             rowNumber,
-            active,
+
+            // active means map-controllable.
+            // Invalid named rows are preserved, but ignored by the map app.
+            active: validForMap,
+
+            hasName,
+            validForMap,
+
+            invalidReason: hasName && !validForMap
+                ? 'Missing start point or range. Row ignored by map app.'
+                : '',
+
             name,
+            originalRow: row,
 
             // Column Q: movement range in pixels.
-            range: active ? range : null,
+            range: hasName ? range : null,
 
             // Columns I:J, read-only start/current position.
-            x1: active ? x1 : null,
-            y1: active ? y1 : null,
+            x1: hasName ? x1 : null,
+            y1: hasName ? y1 : null,
 
             // Columns K:L, optional midpoint.
-            x2: active ? x2 : null,
-            y2: active ? y2 : null,
+            x2: hasName ? x2 : null,
+            y2: hasName ? y2 : null,
             hasMidpoint,
 
             // Columns M:N, endpoint.
-            // If blank, active fleet defaults endpoint to start position.
-            x3: active ? (x3FromSheet ?? x1) : null,
-            y3: active ? (y3FromSheet ?? y1) : null,
+            // If final x/y already exist, preserve them.
+            // If blank but valid for map, default endpoint to start.
+            // If invalid, keep null and preserve original output later.
+            x3: hasName
+                ? (hasFinalPoint ? x3FromSheet : (validForMap ? x1 : null))
+                : null,
+
+            y3: hasName
+                ? (hasFinalPoint ? y3FromSheet : (validForMap ? y1 : null))
+                : null,
         };
     });
 }
 
-function validateMilitaryFleetRows(fleetRows) {
-    const activeRows = fleetRows.filter(f => f.active);
+function summarizeMilitaryFleetRows(fleetRows) {
+    const namedRows = fleetRows.filter(f => f.hasName);
+    const validRows = fleetRows.filter(f => f.validForMap);
+    const invalidRows = fleetRows.filter(f => f.hasName && !f.validForMap);
 
-    if (activeRows.length === 0) {
+    if (namedRows.length === 0) {
         return {
-            ok: false,
-            message: 'No fleet names found in B3:B22. Make sure the pasted link is for the Military tab.',
-        };
-    }
-
-    const invalidRows = activeRows.filter(f =>
-        f.x1 == null ||
-        f.y1 == null ||
-        f.range == null
-    );
-
-    if (invalidRows.length > 0) {
-        return {
-            ok: false,
-            message: `Spreadsheet Data invalid. Check row(s): ${invalidRows.map(f => f.rowNumber).join(', ')}. `
-            //message: `Some active fleet rows are missing x now, y now, or range data. Check rows: ${invalidRows.map(f => f.rowNumber).join(', ')}.`,
+            ok: true,
+            message: 'No fleet names found in B3:B22. Loaded map if factionID exists.',
+            validRows,
+            invalidRows,
         };
     }
 
     return {
         ok: true,
-        message: `Imported ${activeRows.length} fleets.`,
+        message: `Imported ${validRows.length} map-ready fleet(s). Ignored ${invalidRows.length} invalid row(s).`,
+        validRows,
+        invalidRows,
     };
 }
 
@@ -146,40 +169,48 @@ async function importMilitaryFleetsFromSheet(sheetUrl) {
         skipEmptyLines: false,
     });
 
-    const factionId = String(parsed.data?.[1]?.[0] ?? '').trim();
-    //grab faction ID from A2
-
     if (parsed.errors?.length > 0) {
         throw new Error(`CSV parse error: ${parsed.errors[0].message}`);
     }
 
+    const factionId = String(parsed.data?.[1]?.[0] ?? '').trim();
     const fleetRows = parseMilitaryFleetRows(parsed.data);
-    const validation = validateMilitaryFleetRows(fleetRows);
-
-    if (!validation.ok) {
-        throw new Error(validation.message);
-    }
+    const summary = summarizeMilitaryFleetRows(fleetRows);
 
     return {
         fleetRows,
+        validFleetRows: summary.validRows,
+        invalidFleetRows: summary.invalidRows,
         factionId,
-        message: validation.message,
+        message: summary.message,
     };
 }
 
 function buildMovementPasteText(fleetData) {
     return fleetData.map(f => {
         // Preserve empty spreadsheet rows.
-        if (!f.active) {
+        if (!f.hasName) {
             return '\t\t\t';
         }
 
+        // Invalid rows are not controlled by the map app.
+        // Preserve original K:N output exactly as imported.
+        if (!f.validForMap) {
+            const original = f.originalRow || [];
+
+            const x2 = original[10] ?? '';
+            const y2 = original[11] ?? '';
+            const x3 = original[12] ?? '';
+            const y3 = original[13] ?? '';
+
+            return `${x2}\t${y2}\t${x3}\t${y3}`;
+        }
+
         // Midpoint is optional.
-        // Blank x2/y2 means no midpoint, not 0,0.
         const x2 = f.hasMidpoint ? roundOrBlank(f.x2) : '';
         const y2 = f.hasMidpoint ? roundOrBlank(f.y2) : '';
 
-        // Endpoint is required for active fleets.
+        // Endpoint is required for valid map rows.
         // If no movement exists, endpoint equals x1/y1.
         const x3 = roundOrBlank(f.x3 ?? f.x1);
         const y3 = roundOrBlank(f.y3 ?? f.y1);
@@ -202,15 +233,24 @@ export default function Tab2ContentV2({
     const movementPasteText = useMemo(() => {
         return buildMovementPasteText(fleetData);
     }, [fleetData]);
+
     const handleImportFromSheet = useCallback(async () => {
         try {
             setImportStatus('Importing fleet data from sheet...');
 
-            const { fleetRows, factionId, message } =
-                await importMilitaryFleetsFromSheet(fleetImportText);
+            const {
+                fleetRows,
+                validFleetRows,
+                invalidFleetRows,
+                factionId,
+                message,
+            } = await importMilitaryFleetsFromSheet(fleetImportText);
 
             setFleetData(fleetRows);
             setSelectedFleet(null);
+
+            console.info('Valid fleet rows for map:', validFleetRows.length);
+            console.info('Invalid fleet rows ignored by map:', invalidFleetRows.length);
 
             let statusMessage = message;
 
@@ -288,7 +328,7 @@ export default function Tab2ContentV2({
 
             <div className="mt-4 text-sm bg-black bg-opacity-30 text-white p-3 border border-white rounded">
                 <label className="block font-bold mb-2">
-                    
+                    Imported Fleets
                 </label>
 
                 <div
@@ -316,31 +356,37 @@ export default function Tab2ContentV2({
                                 <tr
                                     key={f.rowNumber}
                                     className={
-                                        f.active
+                                        f.validForMap
                                             ? 'hover:bg-gray-700 cursor-pointer'
                                             : 'opacity-50'
                                     }
+                                    title={f.invalidReason || ''}
                                     onClick={() => {
-                                        if (f.active) setSelectedFleet(f);
+                                        if (f.validForMap) setSelectedFleet(f);
                                     }}
                                 >
                                     <td className="px-2 py-1">{f.rowNumber}</td>
+
                                     <td className="px-2 py-1 whitespace-nowrap">
-                                        {f.active ? f.name : '-'}
+                                        {f.hasName ? f.name : '-'}
                                     </td>
+
                                     <td className="px-2 py-1">
-                                        {f.active ? formatPoint(f.x1, f.y1) : '-'}
+                                        {f.validForMap ? formatPoint(f.x1, f.y1) : '-'}
                                     </td>
+
                                     <td className="px-2 py-1">
-                                        {f.active && f.hasMidpoint
+                                        {f.validForMap && f.hasMidpoint
                                             ? formatPoint(f.x2, f.y2)
                                             : '-'}
                                     </td>
+
                                     <td className="px-2 py-1">
-                                        {f.active ? formatPoint(f.x3, f.y3) : '-'}
+                                        {f.validForMap ? formatPoint(f.x3, f.y3) : '-'}
                                     </td>
+
                                     <td className="px-2 py-1">
-                                        {f.active ? f.range : '-'}
+                                        {f.validForMap ? f.range : '-'}
                                     </td>
                                 </tr>
                             ))}
@@ -353,13 +399,7 @@ export default function Tab2ContentV2({
                 <label className="block font-bold mb-2">
                     Results for Military!K3:N22
                 </label>
-                {/*
-                <div className="text-xs mb-2">
-                    Paste copied results into <strong>Military!K3:N22</strong>.
-                    Columns copied: x mid, y mid, end x, end y.
-                    Blank midpoint means no midpoint. Fleets that do not move output their start position as their end position.
-                </div>
-                */}
+
                 <textarea
                     className="w-full h-40 border p-2 text-xs text-black"
                     value={movementPasteText}

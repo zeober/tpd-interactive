@@ -1,62 +1,132 @@
 import { useCallback, useRef } from 'react';
 import L from 'leaflet';
 
-export default function useEraseHandler(eraseRadius, setLines, map) {
-  const eraseCircle = useRef(null);
+function distanceXY(a, b) {
+    const dx = b.lng - a.lng;
+    const dy = b.lat - a.lat;
+    return Math.sqrt(dx * dx + dy * dy);
+}
 
-  const closestDist = (pt, start, end) => {
-    const Cx = end.lng - start.lng, Cy = end.lat - start.lat;
-    const t = ((pt.lng - start.lng) * Cx + (pt.lat - start.lat) * Cy) / (Cx * Cx + Cy * Cy);
-    const clamped = Math.max(0, Math.min(1, t));
-    const xx = start.lng + clamped * Cx;
-    const yy = start.lat + clamped * Cy;
-    return Math.hypot(pt.lng - xx, pt.lat - yy);
-  };
+export default function useEraseHandler(
+    eraseRadius,
+    setLines,
+    map,
+    setCircles,
+    setDroppedMarkers
+) {
+    const eraseCircle = useRef(null);
 
-  const handleErase = useCallback((latlng) => {
-    // 1) Erase lines within radius
-    setLines(prev =>
-      prev.filter(({ positions: [start, end] }) => closestDist(latlng, start, end) > eraseRadius)
-    );
+    const closestDist = (pt, start, end) => {
+        const Cx = end.lng - start.lng;
+        const Cy = end.lat - start.lat;
 
-    // 2) Erase the coordinate-finder marker if within radius
-    if (!map) return;
-    map.eachLayer(layer => {
-      // default marker OR circleMarker variant, tagged with options.isGoto === true
-      const isGoto =
-        (layer instanceof L.Marker || layer instanceof L.CircleMarker) &&
-        layer.options?.isGoto;
+        const denom = Cx * Cx + Cy * Cy;
 
-      if (!isGoto) return;
+        if (denom === 0) {
+            return distanceXY(pt, start);
+        }
 
-      const d = map.distance(latlng, layer.getLatLng()); // works with CRS.Simple
-      if (d <= eraseRadius) {
-        layer.remove();
-      }
-    });
-  }, [eraseRadius, setLines, map]);
+        const t =
+            ((pt.lng - start.lng) * Cx + (pt.lat - start.lat) * Cy) / denom;
 
-  const updateCircle = useCallback(latlng => {
-    if (!eraseCircle.current) {
-      eraseCircle.current = L.circle(latlng, {
-        radius: eraseRadius,
-        color: 'red',
-        weight: 1,
-        fillOpacity: 0.1,
-        interactive: false,
-      }).addTo(map);
-    } else {
-      eraseCircle.current.setLatLng(latlng);
-      eraseCircle.current.setRadius(eraseRadius);
-    }
-  }, [eraseRadius, map]);
+        const clamped = Math.max(0, Math.min(1, t));
 
-  const removeCircle = useCallback(() => {
-    if (eraseCircle.current) {
-      map.removeLayer(eraseCircle.current);
-      eraseCircle.current = null;
-    }
-  }, [map]);
+        const xx = start.lng + clamped * Cx;
+        const yy = start.lat + clamped * Cy;
 
-  return { handleErase, updateCircle, removeCircle };
+        return Math.hypot(pt.lng - xx, pt.lat - yy);
+    };
+
+    const handleErase = useCallback((latlng) => {
+        setLines(prev =>
+            prev.filter(({ positions: [start, end] }) =>
+                closestDist(latlng, start, end) > eraseRadius
+            )
+        );
+
+        if (setCircles) {
+            setCircles(prev =>
+                prev.filter(circle => {
+                    const centerLatLng = {
+                        lng: circle.center.x,
+                        lat: circle.center.y,
+                    };
+
+                    const d = distanceXY(latlng, centerLatLng);
+
+                    const hitsCenter = d <= eraseRadius;
+                    const hitsRing = Math.abs(d - circle.radius) <= eraseRadius;
+
+                    return !(hitsCenter || hitsRing);
+                })
+            );
+        }
+
+        if (setDroppedMarkers) {
+            setDroppedMarkers(prev =>
+                prev.filter(marker => {
+                    const markerLatLng = {
+                        lng: marker.x,
+                        lat: marker.y,
+                    };
+
+                    const d = distanceXY(latlng, markerLatLng);
+
+                    return d > eraseRadius;
+                })
+            );
+        }
+
+        if (!map) return;
+
+        map.eachLayer(layer => {
+            const isGoto =
+                (layer instanceof L.Marker || layer instanceof L.CircleMarker) &&
+                layer.options?.isGoto;
+
+            if (!isGoto) return;
+
+            const d = map.distance(latlng, layer.getLatLng());
+
+            if (d <= eraseRadius) {
+                layer.remove();
+            }
+        });
+    }, [
+        eraseRadius,
+        setLines,
+        setCircles,
+        setDroppedMarkers,
+        map,
+    ]);
+
+    const updateCircle = useCallback((latlng) => {
+        if (!map) return;
+
+        if (!eraseCircle.current) {
+            eraseCircle.current = L.circle(latlng, {
+                radius: eraseRadius,
+                color: 'red',
+                weight: 1,
+                fillOpacity: 0.1,
+                interactive: false,
+            }).addTo(map);
+        } else {
+            eraseCircle.current.setLatLng(latlng);
+            eraseCircle.current.setRadius(eraseRadius);
+        }
+    }, [eraseRadius, map]);
+
+    const removeCircle = useCallback(() => {
+        if (!map || !eraseCircle.current) return;
+
+        map.removeLayer(eraseCircle.current);
+        eraseCircle.current = null;
+    }, [map]);
+
+    return {
+        handleErase,
+        updateCircle,
+        removeCircle,
+    };
 }
