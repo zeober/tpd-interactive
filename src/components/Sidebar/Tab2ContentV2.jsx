@@ -1,6 +1,16 @@
 ﻿// src/components/Sidebar/Tab2ContentV2.jsx
 import { useCallback, useMemo, useState } from 'react';
-import Papa from 'papaparse';
+
+const GM_MAP_WORKER_URL = 'https://gm-map-api.tpd-map-api.workers.dev';
+
+const FACTION_SHEET_GIDS = {
+    turn: '1870318184',
+    civilian: '1173478456',
+    technology: '222911823',
+    military: '0',
+    blueprint: '660550379',
+    traits: '1688184481',
+};
 
 function toNumberOrNull(value) {
     if (value == null) return null;
@@ -26,28 +36,14 @@ function roundOrBlank(value) {
     return String(Math.round(n));
 }
 
-function extractGoogleSheetInfo(url) {
-    const spreadsheetIdMatch = String(url).match(/\/spreadsheets\/d\/([^/]+)/);
-    const gidMatch = String(url).match(/[?&#]gid=(\d+)/);
+function extractSpreadsheetId(sheetUrl) {
+    const spreadsheetIdMatch = String(sheetUrl).match(/\/spreadsheets\/d\/([^/]+)/);
 
     if (!spreadsheetIdMatch) {
-        throw new Error('Invalid Google Sheets link. Paste the full URL from the Military tab.');
+        throw new Error('Invalid Google Sheets link. Paste the full spreadsheet URL.');
     }
 
-    if (!gidMatch) {
-        throw new Error('Missing gid. Open the Military tab first, then copy the URL.');
-    }
-
-    return {
-        spreadsheetId: spreadsheetIdMatch[1],
-        gid: gidMatch[1],
-    };
-}
-
-function buildCsvExportUrl(sheetUrl) {
-    const { spreadsheetId, gid } = extractGoogleSheetInfo(sheetUrl);
-
-    return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${gid}`;
+    return spreadsheetIdMatch[1];
 }
 
 function parseMilitaryFleetRows(rows) {
@@ -155,34 +151,86 @@ function summarizeMilitaryFleetRows(fleetRows) {
 }
 
 async function importMilitaryFleetsFromSheet(sheetUrl) {
-    const csvUrl = buildCsvExportUrl(sheetUrl);
+    const spreadsheetId = extractSpreadsheetId(sheetUrl);
+    
+    const workerUrl =
+        `${GM_MAP_WORKER_URL}/fleet-sheet` +
+        `?spreadsheetId=${encodeURIComponent(spreadsheetId)}` +
+        '&sheet=military';
 
-    const response = await fetch(csvUrl);
-
-    if (!response.ok) {
-        throw new Error('Could not fetch spreadsheet CSV. Make sure the sheet is public and the Military tab URL was pasted.');
-    }
-
-    const csvText = await response.text();
-
-    const parsed = Papa.parse(csvText, {
-        skipEmptyLines: false,
+    console.info('Importing fleet sheet through Cloudflare Worker:', {
+        spreadsheetId,
+        sheet: 'military',
+        gid: FACTION_SHEET_GIDS.military,
+        workerUrl,
     });
 
-    if (parsed.errors?.length > 0) {
-        throw new Error(`CSV parse error: ${parsed.errors[0].message}`);
+    let response;
+
+    try {
+        response = await fetch(workerUrl);
+    } catch (error) {
+        console.error('Cloudflare fleet sheet request failed:', {
+            name: error?.name,
+            message: error?.message,
+            stack: error?.stack,
+            workerUrl,
+        });
+
+        throw new Error(
+            'Could not connect to the fleet import service. Try again, or contact an admin.'
+        );
     }
 
-    const factionId = String(parsed.data?.[1]?.[0] ?? '').trim();
-    const fleetRows = parseMilitaryFleetRows(parsed.data);
+    let data;
+
+    try {
+        data = await response.json();
+    } catch (error) {
+        console.error('Cloudflare fleet sheet response was not JSON:', {
+            status: response.status,
+            statusText: response.statusText,
+            error,
+        });
+
+        throw new Error(
+            'Fleet import service returned an invalid response.'
+        );
+    }
+
+    if (!response.ok || !data.ok) {
+        console.error('Cloudflare fleet sheet import failed:', data);
+
+        const requestIdText = data?.requestId
+            ? ` Request ID: ${data.requestId}`
+            : '';
+
+        throw new Error(
+            `${data?.error || 'Fleet import failed.'}${requestIdText}`
+        );
+    }
+
+    console.info('Cloudflare fleet sheet import success:', {
+        requestId: data.requestId,
+        spreadsheetId: data.spreadsheetId,
+        sheet: data.sheet,
+        gid: data.gid,
+        sheetTitle: data.sheetTitle,
+        range: data.range,
+        factionId: data.factionId,
+        rowCount: data.rows?.length || 0,
+    });
+
+    const fleetRows = parseMilitaryFleetRows(data.rows || []);
     const summary = summarizeMilitaryFleetRows(fleetRows);
 
     return {
+        requestId: data.requestId,
         fleetRows,
         validFleetRows: summary.validRows,
         invalidFleetRows: summary.invalidRows,
-        factionId,
-        message: summary.message,
+        factionId: data.factionId,
+        message: `${summary.message} Request ID: ${data.requestId}`,
     };
 }
 
@@ -219,6 +267,32 @@ function buildMovementPasteText(fleetData) {
     }).join('\n');
 }
 
+function clearAllFleetMovements(fleetData) {
+    return fleetData.map(f => {
+        // Empty rows stay empty.
+        if (!f.hasName) {
+            return f;
+        }
+
+        // Invalid rows are not controlled by the map app.
+        // Preserve original imported data.
+        if (!f.validForMap) {
+            return f;
+        }
+
+        // Valid rows reset movement:
+        // K/L blank, M/N = start position.
+        return {
+            ...f,
+            x2: null,
+            y2: null,
+            hasMidpoint: false,
+            x3: f.x1,
+            y3: f.y1,
+        };
+    });
+}
+
 export default function Tab2ContentV2({
     fleetImportText,
     setFleetImportText,
@@ -236,9 +310,10 @@ export default function Tab2ContentV2({
 
     const handleImportFromSheet = useCallback(async () => {
         try {
-            setImportStatus('Importing fleet data from sheet...');
+            setImportStatus('Importing fleet data through Cloudflare Worker...');
 
             const {
+                requestId,
                 fleetRows,
                 validFleetRows,
                 invalidFleetRows,
@@ -249,6 +324,7 @@ export default function Tab2ContentV2({
             setFleetData(fleetRows);
             setSelectedFleet(null);
 
+            console.info('Fleet import request ID:', requestId);
             console.info('Valid fleet rows for map:', validFleetRows.length);
             console.info('Invalid fleet rows ignored by map:', invalidFleetRows.length);
 
@@ -289,6 +365,21 @@ export default function Tab2ContentV2({
         );
     }, [movementPasteText]);
 
+    const handleClearMovements = useCallback(() => {
+        const confirmed = window.confirm(
+            'Clear all fleet movements? This will reset all valid fleet endpoints to their start positions.'
+        );
+
+        if (!confirmed) return;
+
+        setFleetData(prev => clearAllFleetMovements(prev));
+        setSelectedFleet(null);
+        setImportStatus('Cleared all valid fleet movements. Invalid rows were preserved unchanged.');
+    }, [
+        setFleetData,
+        setSelectedFleet,
+    ]);
+
     return (
         <>
             <label className="block font-bold mb-2 text-sm">
@@ -296,10 +387,11 @@ export default function Tab2ContentV2({
             </label>
 
             <textarea
-                className="w-full h-24 border p-2 text-sm"
+                className="w-full min-h-10 max-h-32 border p-2 text-sm"
                 value={fleetImportText}
                 onChange={e => setFleetImportText(e.target.value)}
-                placeholder="Open the Military tab in Google Sheets, copy the URL, and paste it here"
+                placeholder="Paste the Google Sheets URL"
+                rows={2}
             />
 
             <button
@@ -326,93 +418,23 @@ export default function Tab2ContentV2({
                 </div>
             )}
 
-            <div className="mt-4 text-sm bg-black bg-opacity-30 text-white p-3 border border-white rounded">
-                <label className="block font-bold mb-2">
-                    Imported Fleets
-                </label>
+            {fleetData.length > 0 && (
+                <div className="mt-4 text-sm bg-black bg-opacity-30 text-white p-3 border border-white rounded">
+                    <button
+                        className="sidebar-action-btn sidebar-action-btn--copy"
+                        onClick={handleCopyResults}
+                    >
+                        Copy Movement Results
+                    </button>
 
-                <div
-                    style={{
-                        maxHeight: '240px',
-                        overflowY: 'auto',
-                        border: '1px solid white',
-                        borderRadius: '4px',
-                    }}
-                >
-                    <table className="min-w-full text-xs">
-                        <thead className="bg-gray-800 text-white">
-                            <tr>
-                                <th className="px-2 py-1 text-left">Row</th>
-                                <th className="px-2 py-1 text-left">Name</th>
-                                <th className="px-2 py-1 text-left">Start</th>
-                                <th className="px-2 py-1 text-left">Mid</th>
-                                <th className="px-2 py-1 text-left">End</th>
-                                <th className="px-2 py-1 text-left">Range</th>
-                            </tr>
-                        </thead>
-
-                        <tbody className="divide-y divide-gray-700">
-                            {fleetData.map(f => (
-                                <tr
-                                    key={f.rowNumber}
-                                    className={
-                                        f.validForMap
-                                            ? 'hover:bg-gray-700 cursor-pointer'
-                                            : 'opacity-50'
-                                    }
-                                    title={f.invalidReason || ''}
-                                    onClick={() => {
-                                        if (f.validForMap) setSelectedFleet(f);
-                                    }}
-                                >
-                                    <td className="px-2 py-1">{f.rowNumber}</td>
-
-                                    <td className="px-2 py-1 whitespace-nowrap">
-                                        {f.hasName ? f.name : '-'}
-                                    </td>
-
-                                    <td className="px-2 py-1">
-                                        {f.validForMap ? formatPoint(f.x1, f.y1) : '-'}
-                                    </td>
-
-                                    <td className="px-2 py-1">
-                                        {f.validForMap && f.hasMidpoint
-                                            ? formatPoint(f.x2, f.y2)
-                                            : '-'}
-                                    </td>
-
-                                    <td className="px-2 py-1">
-                                        {f.validForMap ? formatPoint(f.x3, f.y3) : '-'}
-                                    </td>
-
-                                    <td className="px-2 py-1">
-                                        {f.validForMap ? f.range : '-'}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                    <button
+                        className="sidebar-action-btn sidebar-action-btn--clear mt-2"
+                        onClick={handleClearMovements}
+                    >
+                        Clear Movements
+                    </button>
                 </div>
-            </div>
-
-            <div className="mt-4 text-sm bg-black bg-opacity-30 text-white p-3 border border-white rounded">
-                <label className="block font-bold mb-2">
-                    Results for Military!K3:N22
-                </label>
-
-                <textarea
-                    className="w-full h-40 border p-2 text-xs text-black"
-                    value={movementPasteText}
-                    readOnly
-                />
-
-                <button
-                    className="sidebar-action-btn sidebar-action-btn--copy"
-                    onClick={handleCopyResults}
-                >
-                    Copy Fleet Movement Results
-                </button>
-            </div>
+            )}
         </>
     );
 }

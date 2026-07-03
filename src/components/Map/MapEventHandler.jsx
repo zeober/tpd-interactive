@@ -1,4 +1,4 @@
-//src/assets/components/Map/MapEventHandler.jsx
+// src/components/Map/MapEventHandler.jsx
 
 import { useEffect } from 'react';
 import { useMap } from 'react-leaflet';
@@ -8,6 +8,19 @@ import useDrawHandler from './hooks/useDrawHandler';
 import useEraseHandler from './hooks/useEraseHandler';
 import useMapEventsHandler from './hooks/useMapEventsHandler';
 import useCircleHandler from './hooks/useCircleHandler';
+
+import {
+    applyFastMoveFleetMove,
+    applyNormalFleetMove,
+    applyTwoSegmentFleetMove,
+    clampPointToRange,
+    distancePoints,
+    getFleetStartPoint,
+    getMovementLimit,
+    getRemainingRange,
+    pointFromLatLng,
+    updateFleetByRowNumber,
+} from '../Fleet/fleetMovementUtils';
 
 export default function MapEventHandler(props) {
     const map = useMap();
@@ -29,6 +42,18 @@ export default function MapEventHandler(props) {
         setCircles,
         circleStart,
         setCircleStart,
+
+        selectedFleetForMovement,
+        setFleetData,
+        rangeMultiplier,
+        fastMoveEnabled,
+        fleetMovementStep,
+        setFleetMovementStep,
+        fleetMovementMidpoint,
+        setFleetMovementMidpoint,
+        setFleetMovementPreviewPoint,
+        cancelFleetMovement,
+        finishFleetMovement,
     } = props;
 
     const copy = useCopyHandler(coords, setToastMsg);
@@ -50,11 +75,109 @@ export default function MapEventHandler(props) {
         map,
     });
 
+    const handleFleetMovementClick = ({ latlng, originalEvent }) => {
+        if (!selectedFleetForMovement) return false;
+
+        const clickedPoint = pointFromLatLng(latlng);
+        const start = getFleetStartPoint(selectedFleetForMovement);
+
+        if (!start) return true;
+
+        if (fleetMovementStep === 'choosingSecondPoint' && fleetMovementMidpoint) {
+            const remainingRange = getRemainingRange(
+                selectedFleetForMovement,
+                fleetMovementMidpoint,
+                rangeMultiplier
+            );
+
+            const endpoint = clampPointToRange(
+                fleetMovementMidpoint,
+                clickedPoint,
+                remainingRange
+            );
+
+            setFleetData(prev =>
+                updateFleetByRowNumber(
+                    prev,
+                    selectedFleetForMovement.rowNumber,
+                    fleet => applyTwoSegmentFleetMove(fleet, fleetMovementMidpoint, endpoint)
+                )
+            );
+
+            finishFleetMovement?.();
+            return true;
+        }
+
+        const movementLimit = getMovementLimit(selectedFleetForMovement, rangeMultiplier);
+
+        const firstPoint = clampPointToRange(
+            start,
+            clickedPoint,
+            movementLimit
+        );
+
+        if (fastMoveEnabled) {
+            setFleetData(prev =>
+                updateFleetByRowNumber(
+                    prev,
+                    selectedFleetForMovement.rowNumber,
+                    fleet => applyFastMoveFleetMove(fleet, firstPoint)
+                )
+            );
+
+            finishFleetMovement?.();
+            return true;
+        }
+
+        const wantsSecondSegment = originalEvent?.ctrlKey;
+
+        if (wantsSecondSegment) {
+            const firstSegmentDistance = distancePoints(start, firstPoint);
+            const remainingRange = Math.max(0, movementLimit - firstSegmentDistance);
+
+            if (remainingRange <= 0.5) {
+                setFleetData(prev =>
+                    updateFleetByRowNumber(
+                        prev,
+                        selectedFleetForMovement.rowNumber,
+                        fleet => applyTwoSegmentFleetMove(fleet, firstPoint, firstPoint)
+                    )
+                );
+
+                finishFleetMovement?.();
+                return true;
+            }
+
+            setFleetMovementMidpoint(firstPoint);
+            setFleetMovementStep('choosingSecondPoint');
+            setFleetMovementPreviewPoint(null);
+            return true;
+        }
+
+        setFleetData(prev =>
+            updateFleetByRowNumber(
+                prev,
+                selectedFleetForMovement.rowNumber,
+                fleet => applyNormalFleetMove(fleet, firstPoint)
+            )
+        );
+
+        finishFleetMovement?.();
+        return true;
+    };
+
     const onMouseMove = ({ latlng }) => {
         setCoords({
             x: Math.round(latlng.lng),
             y: Math.round(latlng.lat),
         });
+
+        if (selectedFleetForMovement) {
+            setFleetMovementPreviewPoint(pointFromLatLng(latlng));
+            draw.cleanupPreview();
+            erase.removeCircle();
+            return;
+        }
 
         if (activeTool === 'draw') {
             draw.updatePreview(latlng);
@@ -73,7 +196,14 @@ export default function MapEventHandler(props) {
         }
     };
 
-    const onMapClick = ({ latlng }) => {
+    const onMapClick = (event) => {
+        const { latlng } = event;
+
+        if (selectedFleetForMovement) {
+            handleFleetMovementClick(event);
+            return;
+        }
+
         setSelectedFleet(null);
 
         if (activeTool === 'dropMarker') {
@@ -112,7 +242,6 @@ export default function MapEventHandler(props) {
         }
     };
 
-    // Escape = cancel/deselect any active tool.
     useEffect(() => {
         const onKeyDown = (e) => {
             if (e.key !== 'Escape') return;
@@ -120,6 +249,8 @@ export default function MapEventHandler(props) {
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation?.();
+
+            cancelFleetMovement?.();
 
             setActiveTool?.(null);
             setSelectedFleet(null);
@@ -132,13 +263,13 @@ export default function MapEventHandler(props) {
             erase.removeCircle();
         };
 
-        // Capture phase so Leaflet and tool-specific handlers do not receive Escape first.
         window.addEventListener('keydown', onKeyDown, true);
 
         return () => {
             window.removeEventListener('keydown', onKeyDown, true);
         };
     }, [
+        cancelFleetMovement,
         setActiveTool,
         setSelectedFleet,
         setIsMultiDraw,
@@ -148,12 +279,10 @@ export default function MapEventHandler(props) {
         erase.removeCircle,
     ]);
 
-    // Disable Leaflet keyboard shortcuts while Circle tool is active.
-    // This prevents number keys like "6" from zooming the map.
     useEffect(() => {
         if (!map.keyboard) return;
 
-        if (activeTool === 'circle') {
+        if (activeTool === 'circle' || selectedFleetForMovement) {
             map.keyboard.disable();
         } else {
             map.keyboard.enable();
@@ -164,13 +293,16 @@ export default function MapEventHandler(props) {
                 map.keyboard.enable();
             }
         };
-    }, [activeTool, map]);
+    }, [activeTool, selectedFleetForMovement, map]);
 
-    // Touch-action gating
     useEffect(() => {
         const container = map.getContainer();
 
-        if (activeTool === 'draw' || activeTool === 'circle') {
+        if (
+            activeTool === 'draw' ||
+            activeTool === 'circle' ||
+            selectedFleetForMovement
+        ) {
             container.style.touchAction = 'none';
         } else {
             container.style.touchAction = '';
@@ -179,9 +311,8 @@ export default function MapEventHandler(props) {
         return () => {
             container.style.touchAction = '';
         };
-    }, [activeTool, map]);
+    }, [activeTool, selectedFleetForMovement, map]);
 
-    // Keyboard multi-draw with Ctrl
     useEffect(() => {
         const down = e => {
             if (e.key === 'Control') {
@@ -210,7 +341,6 @@ export default function MapEventHandler(props) {
         };
     }, [setIsMultiDraw]);
 
-    // Reset line tool state when leaving Line/Draw tool.
     useEffect(() => {
         if (activeTool !== 'draw') {
             setDrawStart(null);
@@ -218,7 +348,6 @@ export default function MapEventHandler(props) {
         }
     }, [activeTool, setDrawStart, draw.reset]);
 
-    // Reset circle tool state when leaving Circle tool.
     useEffect(() => {
         if (activeTool !== 'circle') {
             circle.reset();

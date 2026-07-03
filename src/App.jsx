@@ -1,5 +1,5 @@
 // src/App.jsx
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     MapContainer,
     ImageOverlay,
@@ -25,7 +25,7 @@ import resourceLegend from './assets/map/Resource_legend.png';
 // Components
 import Sidebar from './components/Sidebar/Sidebar';
 import CursorManager from './components/Map/CursorManager';
-import FleetMapApp from './components/Fleet/FleetManager';
+//import FleetMapApp from './components/Fleet/FleetManager'; Deprecated
 import MapEventHandler from './components/Map/MapEventHandler';
 import Toolbar from './components/UI/Toolbar';
 import Toast from './components/UI/Toast';
@@ -36,6 +36,24 @@ import NationSidebar from './components/NationSidebar/NationSidebar';
 import LegendPanel from './components/LegendPanel/LegendPanel';
 import MarkerToggle from './components/MarkerToggle/MarkerToggle';
 import CoordinateFinder from './components/Map/CoordinateFinder';
+
+// Fleet Movement Components
+import FleetMovementPanel from './components/Fleet/FleetMovementPanel';
+import FleetMovementLayer from './components/Fleet/FleetMovementLayer';
+
+import {
+    applyFastMoveFleetMove,
+    applyNormalFleetMove,
+    applyTwoSegmentFleetMove,
+    clampPointToRange,
+    getFleetStartPoint,
+    getMovementLimit,
+    getRemainingRange,
+    resetFleetMovement,
+    updateFleetByRowNumber,
+} from './components/Fleet/fleetMovementUtils';
+
+
 
 // Constants
 const bounds = [[0, 0], [9216, 9216]];
@@ -140,6 +158,7 @@ const App = () => {
     const [activeSidebarTab, setActiveSidebarTab] = useState('tab1');
     const [legendOpen, setLegendOpen] = useState(false);
     const [nationSidebarOpen, setNationSidebarOpen] = useState(false);
+    const [sidebarOpenBeforeFleetMovement, setSidebarOpenBeforeFleetMovement] = useState(null);
 
     // Active selections
     const [activeTool, setActiveTool] = useState(null);
@@ -164,6 +183,23 @@ const App = () => {
     const [fleetImportTrigger, setFleetImportTrigger] = useState('');
     const [selectedFleet, setSelectedFleet] = useState(null);
     const [fleetData, setFleetData] = useState([]);
+
+
+    // Fleet Movement Handler
+    const [selectedFleetMovementRowNumber, setSelectedFleetMovementRowNumber] = useState(null);
+    const [rangeMultiplier, setRangeMultiplier] = useState(1);
+    const [fastMoveEnabled, setFastMoveEnabled] = useState(false);
+    const [fleetMovementStep, setFleetMovementStep] = useState(null);
+    const [fleetMovementMidpoint, setFleetMovementMidpoint] = useState(null);
+    const [fleetMovementPreviewPoint, setFleetMovementPreviewPoint] = useState(null);
+
+    const selectedFleetForMovement = useMemo(() => {
+        if (selectedFleetMovementRowNumber == null) return null;
+
+        return fleetData.find(fleet =>
+            fleet.rowNumber === selectedFleetMovementRowNumber
+        ) || null;
+    }, [fleetData, selectedFleetMovementRowNumber]);
 
     // Maps
     const [importedMaps, setImportedMaps] = useState([]);
@@ -376,8 +412,160 @@ const App = () => {
         )
         || MAPS[selectedMap];
 
+    const restoreSidebarAfterFleetMovement = useCallback(() => {
+        setSidebarOpenBeforeFleetMovement(previous => {
+            if (previous !== null) {
+                setSidebarOpen(previous);
+            }
+
+            return null;
+        });
+    }, []);
+
+    const cancelFleetMovement = useCallback(() => {
+        setSelectedFleetMovementRowNumber(null);
+        setFleetMovementStep(null);
+        setFleetMovementMidpoint(null);
+        setFleetMovementPreviewPoint(null);
+        restoreSidebarAfterFleetMovement();
+    }, [restoreSidebarAfterFleetMovement]);
+
+    const finishFleetMovement = useCallback(() => {
+        setSelectedFleetMovementRowNumber(null);
+        setFleetMovementStep(null);
+        setFleetMovementMidpoint(null);
+        setFleetMovementPreviewPoint(null);
+        restoreSidebarAfterFleetMovement();
+    }, [restoreSidebarAfterFleetMovement]);
+
+    const moveSelectedFleetToPoint = useCallback((targetPoint) => {
+        if (!selectedFleetForMovement) return false;
+
+        const start = getFleetStartPoint(selectedFleetForMovement);
+        if (!start) return false;
+
+        if (fleetMovementStep === 'choosingSecondPoint' && fleetMovementMidpoint) {
+            const remainingRange = getRemainingRange(
+                selectedFleetForMovement,
+                fleetMovementMidpoint,
+                rangeMultiplier
+            );
+
+            const endpoint = clampPointToRange(
+                fleetMovementMidpoint,
+                targetPoint,
+                remainingRange
+            );
+
+            setFleetData(prev =>
+                updateFleetByRowNumber(
+                    prev,
+                    selectedFleetForMovement.rowNumber,
+                    fleet => applyTwoSegmentFleetMove(
+                        fleet,
+                        fleetMovementMidpoint,
+                        endpoint
+                    )
+                )
+            );
+
+            finishFleetMovement();
+            return true;
+        }
+
+        const movementLimit = getMovementLimit(
+            selectedFleetForMovement,
+            rangeMultiplier
+        );
+
+        const endpoint = clampPointToRange(
+            start,
+            targetPoint,
+            movementLimit
+        );
+
+        if (fastMoveEnabled) {
+            setFleetData(prev =>
+                updateFleetByRowNumber(
+                    prev,
+                    selectedFleetForMovement.rowNumber,
+                    fleet => applyFastMoveFleetMove(fleet, endpoint)
+                )
+            );
+
+            finishFleetMovement();
+            return true;
+        }
+
+        setFleetData(prev =>
+            updateFleetByRowNumber(
+                prev,
+                selectedFleetForMovement.rowNumber,
+                fleet => applyNormalFleetMove(fleet, endpoint)
+            )
+        );
+
+        finishFleetMovement();
+        return true;
+    }, [
+        selectedFleetForMovement,
+        fleetMovementStep,
+        fleetMovementMidpoint,
+        rangeMultiplier,
+        fastMoveEnabled,
+        setFleetData,
+        finishFleetMovement,
+    ]);
+
+    const startFleetMovement = useCallback((fleet) => {
+        if (!fleet?.validForMap) return;
+
+        // If a fleet is already selected for movement, do not select a new fleet.
+        // Instead, use this clicked fleet's start position as the movement destination.
+        if (selectedFleetForMovement) {
+            moveSelectedFleetToPoint({
+                x: fleet.x1,
+                y: fleet.y1,
+            });
+
+            return;
+        }
+
+        setActiveTool(null);
+        setSelectedFleet(fleet);
+
+        // Hide sidebar while fleet movement is active.
+        // Remember whether it was open so we can restore it after movement ends.
+        setSidebarOpenBeforeFleetMovement(current => {
+            if (current !== null) return current;
+            return sidebarOpen;
+        });
+        setSidebarOpen(false);
+
+        setSelectedFleetMovementRowNumber(fleet.rowNumber);
+        setFleetMovementStep('choosingFirstPoint');
+        setFleetMovementMidpoint(null);
+        setFleetMovementPreviewPoint(null);
+
+        // Selecting a fleet clears its old planned movement and starts over.
+        setFleetData(prev =>
+            updateFleetByRowNumber(
+                prev,
+                fleet.rowNumber,
+                currentFleet => resetFleetMovement(currentFleet)
+            )
+        );
+    }, [
+        selectedFleetForMovement,
+        moveSelectedFleetToPoint,
+        sidebarOpen,
+        setActiveTool,
+        setSelectedFleet,
+        setFleetData,
+    ]);
+
     return (
-        <div className={`App ${sidebarOpen ? 'sidebar-open' : ''} …`}>
+        <div className={`App ${sidebarOpen ? 'sidebar-open' : ''}`}>
             <Sidebar
                 sidebarOpen={sidebarOpen}
                 toggleSidebar={toggleSidebar}
@@ -403,13 +591,26 @@ const App = () => {
                 importFactionMapByFileName={importFactionMapByFileName}
             />
 
-            <Toolbar
-                activeTool={activeTool}
-                setActiveTool={setActiveTool}
-                eraseRadius={eraseRadius}
-                setEraseRadius={setEraseRadius}
-                onGotoSubmit={(raw) => setGotoValue(raw)}
-            />
+            {selectedFleetForMovement ? (
+                <FleetMovementPanel
+                    fleet={selectedFleetForMovement}
+                    rangeMultiplier={rangeMultiplier}
+                    setRangeMultiplier={setRangeMultiplier}
+                    fastMoveEnabled={fastMoveEnabled}
+                    setFastMoveEnabled={setFastMoveEnabled}
+                    fleetMovementStep={fleetMovementStep}
+                    fleetMovementMidpoint={fleetMovementMidpoint}
+                    onCancel={cancelFleetMovement}
+                />
+            ) : (
+                <Toolbar
+                    activeTool={activeTool}
+                    setActiveTool={setActiveTool}
+                    eraseRadius={eraseRadius}
+                    setEraseRadius={setEraseRadius}
+                    onGotoSubmit={(raw) => setGotoValue(raw)}
+                />
+            )}
 
             <Toast message={toastMsg} />
 
@@ -449,6 +650,16 @@ const App = () => {
                         <Popup>{m.title}</Popup>
                     </Marker>
                 ))}
+
+                <FleetMovementLayer
+                    fleetData={fleetData}
+                    selectedFleetForMovement={selectedFleetForMovement}
+                    fleetMovementStep={fleetMovementStep}
+                    fleetMovementMidpoint={fleetMovementMidpoint}
+                    fleetMovementPreviewPoint={fleetMovementPreviewPoint}
+                    rangeMultiplier={rangeMultiplier}
+                    onFleetMarkerClick={startFleetMovement}
+                />
 
                 {droppedMarkers.map(marker => (
                     <Marker
@@ -496,14 +707,7 @@ const App = () => {
                         </Tooltip>
                     </Circle>
                 ))}
-
-                <FleetMapApp
-                    importText={fleetImportTrigger}
-                    selectedFleet={selectedFleet}
-                    setSelectedFleet={setSelectedFleet}
-                    activeTool={activeTool}
-                    onFleetUpdate={setFleetData}
-                />
+                
 
                 <MapEventHandler
                     coords={coords}
@@ -525,6 +729,18 @@ const App = () => {
                     setCircles={setCircles}
                     circleStart={circleStart}
                     setCircleStart={setCircleStart}
+
+                    selectedFleetForMovement={selectedFleetForMovement}
+                    setFleetData={setFleetData}
+                    rangeMultiplier={rangeMultiplier}
+                    fastMoveEnabled={fastMoveEnabled}
+                    fleetMovementStep={fleetMovementStep}
+                    setFleetMovementStep={setFleetMovementStep}
+                    fleetMovementMidpoint={fleetMovementMidpoint}
+                    setFleetMovementMidpoint={setFleetMovementMidpoint}
+                    setFleetMovementPreviewPoint={setFleetMovementPreviewPoint}
+                    cancelFleetMovement={cancelFleetMovement}
+                    finishFleetMovement={finishFleetMovement}
                 />
 
                 <CoordinateFinder

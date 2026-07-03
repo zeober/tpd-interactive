@@ -1,20 +1,28 @@
+// src/markerIcons.js
 import L from 'leaflet';
 
-// Dynamically require all images in the markers folder
-const requireMarkerImages = require.context('./assets/markers', false, /\.(png|jpe?g|svg)$/);
+import clickmarkerPng from './assets/markers/clickmarker.png';
+import fleetMarkerPng from './assets/markers/fleet_marker.png';
 
-// Create an object mapping filenames (without extension) to Leaflet icon instances
-const markerIcons = {};
-
-requireMarkerImages.keys().forEach((fileName) => {
-  // Remove the "./" at the beginning and the file extension
-  const key = fileName.replace('./', '').replace(/\.(png|jpe?g|svg)$/, '');
-  markerIcons[key] = L.icon({
-    iconUrl: requireMarkerImages(fileName).default || requireMarkerImages(fileName),
-    iconSize: [30, 30],
-    iconAnchor: [15, 30],
-    popupAnchor: [0, -30],
-  });
+const clickmarker = new L.Icon({
+    iconUrl: clickmarkerPng,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -14],
+    tooltipAnchor: [14, 0],
 });
+
+const fleet = new L.Icon({
+    iconUrl: fleetMarkerPng,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -14],
+    tooltipAnchor: [14, 0],
+});
+
+const markerIcons = {
+    clickmarker,
+    fleet,
+};
 
 export default markerIcons;

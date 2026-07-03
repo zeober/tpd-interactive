@@ -1,0 +1,87 @@
+.fleet-movement-panel {
+    position: absolute;
+    left: 12px;
+    bottom: 12px;
+    z-index: 1200;
+    min-width: 320px;
+    max-width: 420px;
+    background: rgba(20, 20, 20, 0.92);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 8px;
+    padding: 12px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+    font-size: 13px;
+    line-height: 1.35;
+}
+
+.fleet-movement-panel__section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 10px;
+}
+
+.fleet-movement-panel__title {
+    font-weight: 700;
+    font-size: 15px;
+    color: #ffffff;
+    margin-bottom: 4px;
+}
+
+.fleet-movement-panel__row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: #ffffff;
+}
+
+.fleet-movement-panel__label {
+    color: #cfcfcf;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.fleet-movement-panel__controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+
+.fleet-movement-panel__toggle,
+.fleet-movement-panel__cancel {
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    border-radius: 6px;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+}
+
+    .fleet-movement-panel__toggle:hover,
+    .fleet-movement-panel__cancel:hover {
+        background: rgba(255, 255, 255, 0.22);
+    }
+
+    .fleet-movement-panel__toggle.is-on {
+        background: rgba(74, 144, 226, 0.95);
+        border-color: rgba(160, 205, 255, 0.95);
+        color: #ffffff;
+    }
+
+.fleet-movement-panel__cancel {
+    background: rgba(160, 40, 40, 0.85);
+}
+
+    .fleet-movement-panel__cancel:hover {
+        background: rgba(190, 50, 50, 0.95);
+    }
+
+.fleet-movement-panel__hint {
+    margin-top: 10px;
+    color: #dddddd;
+    font-size: 12px;
+}
